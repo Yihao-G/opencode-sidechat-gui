@@ -1,0 +1,33 @@
+{
+  "name": "opencode-sidechat-gui",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Multi-turn side chats for OpenCode Desktop: fork the current session into a tab in the side panel and keep asking there, without touching the main chat.",
+  "type": "module",
+  "exports": {
+    "./gui-experimental": "./dist/gui-experimental.cjs"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite build --watch",
+    "test": "vitest run",
+    "test:integration": "vitest run -c vitest.integration.config.ts",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm run build && npm test"
+  },
+  "dependencies": {
+    "@opencode/plugin": "^2.2.0",
+    "effect": "^4.0.1"
+  },
+  "devDependencies": {
+    "happy-dom": "^21.0.4",
+    "solid-js": "^1.9.17",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5",
+    "vite-plugin-solid": "^2.11.14",
+    "vitest": "^5.0.5"
+  }
+}
