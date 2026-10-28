@@ -16,13 +16,15 @@
     "test": "vitest run",
     "test:integration": "vitest run -c vitest.integration.config.ts",
     "typecheck": "tsc --noEmit",
-    "check": "npm run typecheck && npm run build && npm test"
+    "check": "npm run typecheck && npm run build && npm test",
+    "diagnose": "node scripts/diagnose.mjs"
   },
   "dependencies": {
     "@opencode/plugin": "^2.2.0",
     "effect": "^4.0.1"
   },
   "devDependencies": {
+    "@opencode/client": "^2.2.0",
     "happy-dom": "^21.0.4",
     "solid-js": "^1.9.17",
     "typescript": "^7.0.2",

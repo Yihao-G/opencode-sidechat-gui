@@ -80,7 +80,36 @@ To run side chats with another agent (a read-only one, for example) or another m
 
 Without options, a side chat inherits the main session's agent and model. An agent that isn't found shows a warning
 and falls back to the main session's agent. **Settings → Extensions → Plugins** lists the plugin as
-`opencode-sidechat-gui`, with a switch to turn it off.
+`opencode-sidechat-gui` under **This computer**, with a switch to turn it off.
+
+### Windows and WSL
+
+Desktop loads plugin GUIs only from its own server, **This computer**. On Windows that is the Windows background
+service, which reads `%USERPROFILE%\.config\opencode\opencode.json` (or `.jsonc`), not the config inside a WSL distro.
+Add the plugin there, with a Windows path to a built copy:
+
+```jsonc
+// C:\Users\<you>\.config\opencode\opencode.json
+{ "plugins": ["C:/Users/<you>/code/opencode-sidechat-gui"] }
+```
+
+Don't add a `C:/…` path to the WSL config. Linux doesn't see it as a path, so the WSL server treats it as an npm package
+name and fails to load it. You don't need it there either. The GUI loaded from **This computer** sends each request to the server of the
+session you have open, so it should work on WSL sessions too (not yet tested).
+
+### Troubleshooting
+
+If the plugin doesn't appear, run this on the machine that runs Desktop, from this folder:
+
+```sh
+npm run diagnose
+```
+
+It checks three things:
+
+1. Which global config files the local server reads, and their `plugins` entries.
+2. Whether `dist/gui-experimental.cjs` is built. Without it the plugin is skipped, with no error.
+3. What the running service actually lists and serves.
 
 ## Develop
 
