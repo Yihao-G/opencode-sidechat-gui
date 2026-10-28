@@ -2,7 +2,8 @@
 //
 // The fork guard, the abort-after-fork cleanup, `base`, unsent drafts and the store-backed tabs are adapted from
 // OpenCode PR #54356 (packages/gui-extensions/src/side-chat/model.ts), MIT licensed.
-import { batch, createMemo, onCleanup } from "solid-js"
+import { batch, createMemo, createRoot, getOwner, onCleanup } from "solid-js"
+import { createData } from "@opencode/client/solid"
 import { createStore, produce } from "solid-js/store"
 import {
   createKeyed,
@@ -196,6 +197,82 @@ export async function sessionExists(api: Api, sessionID: string): Promise<boolea
 }
 
 // ---------------------------------------------------------------------------------------------------------------
+// The forks' own synced store.
+// ---------------------------------------------------------------------------------------------------------------
+
+/** The session a server event is about, if it is about one. */
+function eventSession(event: unknown): string | undefined {
+  const data = (event as { data?: { sessionID?: unknown; form?: { sessionID?: unknown } } } | undefined)?.data
+  const id = data?.sessionID ?? data?.form?.sessionID
+
+  return typeof id === "string" ? id : undefined
+}
+
+/**
+ * A synced store per server for the forks alone. The app's own store (`ServerRef.data`) runs session retention: only
+ * the routed session, open tabs' sessions and the three most recently routed ones keep their transcripts, and every
+ * other session's messages are evicted as they arrive. A fork is never routed, so its transcript would vanish. This
+ * store is the same `createData` the app uses, fed from the same event connection, but outside that retention and
+ * given only the events of the sessions `watch` names (plus those about no session).
+ */
+export function createForkStores() {
+  const owner = getOwner()
+  const watched = new Set<string>()
+  const stores = new Map<string, { source: Data; store: Data; dispose(): void }>()
+
+  const relevant = (event: unknown) => {
+    const id = eventSession(event)
+
+    return id === undefined || watched.has(id)
+  }
+
+  onCleanup(() => {
+    stores.forEach((entry) => entry.dispose())
+    stores.clear()
+  })
+
+  return {
+    /** Starts following a fork's events. */
+    watch: (sessionID: string) => void watched.add(sessionID),
+    /** Stops following a fork and drops what the stores hold of it. */
+    forget(sessionID: string) {
+      watched.delete(sessionID)
+      stores.forEach((entry) => entry.store.session.evict(sessionID))
+    },
+    /** The store for a server; a restarted server, with new data, gets a new one. */
+    data(server: ServerRef): Data {
+      const source = server.data
+      const existing = stores.get(server.id)
+
+      if (existing?.source === source) return existing.store
+      existing?.dispose()
+
+      const created = createRoot(
+        (dispose) => ({
+          dispose,
+          store: createData({
+            api: () => server.client,
+            directory: "",
+            initialMessageLimit: () => 40,
+            omitToolFileData: true,
+            event: {
+              on: (type, handler) => source.on(type, (event) => relevant(event) && handler(event)),
+              listen: (handler) => source.listen((event) => relevant(event.details) && handler(event)),
+            },
+            onError: (error) => console.warn("[opencode-sidechat-gui] side chat sync failed", error),
+          }),
+        }),
+        owner,
+      )
+
+      stores.set(server.id, { source, ...created })
+
+      return created.store
+    },
+  }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
 // The window's side chat model.
 // ---------------------------------------------------------------------------------------------------------------
 
@@ -209,8 +286,18 @@ export interface OpenInput {
 }
 
 /** Side chats per session: forks of the main one, one tab each, deleted when the tab closes. */
-export function createSideChat(ctx: SetupContext<Definition>, input: { readonly selection: () => string }) {
+export function createSideChat(
+  ctx: SetupContext<Definition>,
+  input: {
+    readonly selection: () => string
+    /** The forks' synced store per server; tests may pass the server's own. */
+    readonly data?: (server: ServerRef) => Data
+  },
+) {
   const options = parseOptions(ctx.options)
+  const forks = createForkStores()
+  // The store a session's side chats read and write: never the app's own, whose retention evicts unrouted sessions.
+  const data = (session: SessionRef) => (input.data ? input.data(session.server) : forks.data(session.server))
   const saved = (session: SessionRef) => ctx.stores.chats(session)
   const ledger = ctx.stores.ledger
   // Unsent composer text by tab id. It lives as long as the window, like the other composers' unsaved edits.
@@ -327,7 +414,10 @@ export function createSideChat(ctx: SetupContext<Definition>, input: { readonly 
       }
 
       addLedger([{ server: server.id, parent: parentID, fork: made.fork.id, chat: id, created: Date.now() }])
+      forks.watch(made.fork.id)
+      // The app's store gets the archived snapshot too: its session lists filter on `time.archived`.
       server.data.session.remember(made.fork)
+      data(session).session.remember(made.fork)
       batch(() => {
         saved(session).update((draft) => {
           const chat = draft.chats.find((item) => item.id === id)
@@ -411,7 +501,8 @@ export function createSideChat(ctx: SetupContext<Definition>, input: { readonly 
     if (!value) return
 
     setDrafts(id, "")
-    void session.server.data.session.prompt({ sessionID, text: value }).catch((cause: unknown) => {
+    forks.watch(sessionID)
+    void data(session).session.prompt({ sessionID, text: value }).catch((cause: unknown) => {
       // Put the text back unless the user already typed something new.
       setDrafts(id, (current) => (current?.trim() ? current : text))
       toast(ctx.t("send.failed"), cause)
@@ -431,6 +522,7 @@ export function createSideChat(ctx: SetupContext<Definition>, input: { readonly 
     dropChats(session, [chat.id])
     if (ctx.layout.state(key(chat.id), session) !== "closed") ctx.layout.close(key(chat.id), session)
     if (!chat.sessionID) return
+    if (!input.data) forks.forget(chat.sessionID)
     if (deleteTheFork) void deleteForks(session.server, [chat.sessionID])
     else dropLedger(session.server.id, [chat.sessionID])
   }
@@ -575,6 +667,20 @@ export function createSideChat(ctx: SetupContext<Definition>, input: { readonly 
   return {
     open,
     retry,
+    /** The synced store the session's side chats read: messages, pending input, permission requests, questions. */
+    data,
+    /** Loads a fork's transcript, pending input, permission requests and questions, and follows them from then on. */
+    sync(session: SessionRef, sessionID: string) {
+      forks.watch(sessionID)
+      const store = data(session)
+
+      return Promise.all([
+        store.session.message.sync(sessionID),
+        store.session.pending.sync(sessionID),
+        store.session.permission.sync(sessionID),
+        store.session.form.sync(sessionID),
+      ]).then(() => undefined)
+    },
     saved,
     entry,
     options,
@@ -611,7 +717,7 @@ export function createSideChat(ctx: SetupContext<Definition>, input: { readonly 
       const chat = entry(session, id)
 
       if (!chat?.sessionID) return
-      await session.server.data.session.permission
+      await data(session).session.permission
         .reply({ sessionID: chat.sessionID, requestID, decision })
         .catch((cause: unknown) => toast(ctx.t("permission.failed"), cause))
     },
@@ -620,7 +726,7 @@ export function createSideChat(ctx: SetupContext<Definition>, input: { readonly 
       const chat = entry(session, id)
 
       if (!chat?.sessionID) return
-      await session.server.data.session.form
+      await data(session).session.form
         .reply({ sessionID: chat.sessionID, formID, answer })
         .catch((cause: unknown) => toast(ctx.t("form.failed"), cause))
     },
@@ -629,7 +735,7 @@ export function createSideChat(ctx: SetupContext<Definition>, input: { readonly 
       const chat = entry(session, id)
 
       if (!chat?.sessionID) return
-      await session.server.data.session.form
+      await data(session).session.form
         .cancel({ sessionID: chat.sessionID, formID })
         .catch((cause: unknown) => toast(ctx.t("form.failed"), cause))
     },

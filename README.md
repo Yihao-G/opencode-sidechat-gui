@@ -153,8 +153,10 @@ src/
    Forks have no `parentID`. OpenCode treats `parentID` as "subagent", so the plugin never sets it.
 3. **Tab.** The tab opens immediately in a "Starting…" state, so a failed fork can show **Retry** inline as well as in a
    toast. Repeat triggers are ignored while a fork for that session is in progress.
-4. **Live data** comes from the app's synced store, `session.server.data`: messages, status, pending input, permissions
-   and questions. The plugin doesn't poll.
+4. **Live data** (messages, pending input, permissions and questions) comes from the plugin's own synced store. It's
+   the same `createData` the app uses, fed from the app's event connection, but holding only the forks. The plugin
+   can't use the app's store (`session.server.data`) for this: the app evicts transcripts of sessions that aren't
+   routed or open as tabs, and a fork never is. Run status still comes from the app's store. The plugin doesn't poll.
 
 ### Cleanup
 

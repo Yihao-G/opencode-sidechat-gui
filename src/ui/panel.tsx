@@ -22,7 +22,8 @@ export function SideChatPanel(props: {
   const ctx = usePlugin<Definition>()
   const chat = () => props.model.entry(props.session, props.id)
   const phase = () => props.model.phase(props.id)
-  const data = () => props.session.server.data
+  // The forks' own store, not `props.session.server.data`: the app's retention evicts unrouted sessions' messages.
+  const data = () => props.model.data(props.session)
   const forkID = () => chat()?.sessionID
   const running = () => props.model.running(props.session, forkID())
   const connected = () => props.session.server.connected
@@ -31,15 +32,8 @@ export function SideChatPanel(props: {
   let transcript: HTMLDivElement | undefined
 
   const sync = (id: string) => {
-    const store = data()
-
     setLoad({ status: "loading" })
-    Promise.all([
-      store.session.message.sync(id),
-      store.session.pending.sync(id),
-      store.session.permission.sync(id),
-      store.session.form.sync(id),
-    ]).then(
+    props.model.sync(props.session, id).then(
       () => forkID() === id && setLoad({ status: "ready" }),
       (cause: unknown) => forkID() === id && setLoad({ status: "failed", ...(errorMessage(cause) ? { error: errorMessage(cause) } : {}) }),
     )
@@ -50,7 +44,7 @@ export function SideChatPanel(props: {
     () => {
       const id = forkID()
 
-      return id && connected() ? { id, data: data() } : undefined
+      return id && connected() ? { id, data: props.session.server.data } : undefined
     },
     (key) => sync(key.id),
     { equals: (previous, next) => previous.id === next.id && previous.data === next.data },

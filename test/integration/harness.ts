@@ -4,7 +4,7 @@
 import { createRoot, createSignal } from "solid-js"
 import { createStore, produce } from "solid-js/store"
 import { OpenCode, type OpenCodeClient } from "@opencode/client"
-import { createData } from "@opencode/client/solid"
+import { createData, createSessionRetention } from "@opencode/client/solid"
 import type { MountedSession, ServerRef, SetupContext } from "@opencode/plugin/gui"
 import type { Definition } from "../../src/definition"
 import en from "../../src/i18n/en"
@@ -44,8 +44,19 @@ export function makeClient(): OpenCodeClient {
 
 type Handler = (event: { type: string }) => void
 
-/** The server ref the app would hand the plugin: a live client, the synced store, and the event connection. */
-export function makeServer(client: OpenCodeClient) {
+/**
+ * The server ref the app would hand the plugin: a live client, the synced store, and the event connection. The store
+ * is set up as the app sets up its own (packages/app/src/runtime/server/runtime.tsx in OpenCode 2.2.0), including
+ * session retention: only the routed session (`routed()`), open tabs' sessions (`tabs()`) and the three most recently
+ * routed ones keep their transcripts, and every other session's messages are evicted as they arrive.
+ */
+export function makeServer(
+  client: OpenCodeClient,
+  retention: { readonly routed: () => string | undefined; readonly tabs: () => readonly string[] } = {
+    routed: () => undefined,
+    tabs: () => [],
+  },
+) {
   const typed = new Map<string, Set<Handler>>()
   const all = new Set<(event: { name: string; details: unknown }) => void>()
   const controller = new AbortController()
@@ -77,15 +88,21 @@ export function makeServer(client: OpenCodeClient) {
     }
   })()
 
-  const data = createRoot(() =>
-    createData({
+  const data = createRoot(() => {
+    const source = createData({
       api: () => client,
-      directory: env.directory!,
+      initialMessageLimit: () => 20,
+      directory: "",
+      omitToolFileData: true,
       // SAFETY: the handlers receive the server's events unchanged, as the app's own wiring passes them.
       event: event as unknown as Parameters<typeof createData>[0]["event"],
       onError: (error) => console.warn("[data]", error),
-    }),
-  )
+    })
+
+    createSessionRetention({ session: source.session, current: retention.routed, keep: retention.tabs, limit: 3 })
+
+    return source
+  })
 
   const server = {
     id: "sidecar",
@@ -140,6 +157,8 @@ export function makeHost(input: {
   readonly server: ServerRef
   readonly options?: Record<string, unknown>
   readonly ui?: unknown
+  /** The store side chats use, instead of the plugin's own per-server store. */
+  readonly data?: (server: ServerRef) => ServerRef["data"]
   readonly composer?: { quotable(): boolean; attach(part: unknown): void }
   readonly stores?: { chats: Map<string, ReturnType<typeof persisted<{ chats: Chat[] }>>>; ledger: ReturnType<typeof persisted<{ forks: LedgerEntry[] }>> }
   readonly strips?: Map<string, string[]>
@@ -218,7 +237,10 @@ export function makeHost(input: {
     dispose = release
 
     // SAFETY: the model reads only the members faked above.
-    return createSideChat(ctx as unknown as SetupContext<Definition>, { selection: () => "" })
+    return createSideChat(ctx as unknown as SetupContext<Definition>, {
+      selection: () => "",
+      ...(input.data ? { data: input.data } : {}),
+    })
   })
 
   return {

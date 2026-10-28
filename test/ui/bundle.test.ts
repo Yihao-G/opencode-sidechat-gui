@@ -3,6 +3,7 @@
 import { existsSync, readFileSync } from "node:fs"
 import { resolve } from "node:path"
 import * as effect from "effect"
+import * as clientSolid from "@opencode/client/solid"
 import * as solid from "solid-js"
 import * as store from "solid-js/store"
 import * as web from "solid-js/web"
@@ -20,6 +21,7 @@ const provided: Record<string, unknown> = {
   "solid-js/store": store,
   "solid-js/web": web,
   "@opencode/plugin/gui": sdk,
+  "@opencode/client/solid": clientSolid,
 }
 
 describe.skipIf(!existsSync(file))("the built bundle", () => {
@@ -41,7 +43,7 @@ describe.skipIf(!existsSync(file))("the built bundle", () => {
 
     const definition = module.exports.default as { setup(ctx: unknown): void; stores: Record<string, { scope: string }> }
 
-    expect(required.sort()).toEqual(["@opencode/plugin/gui", "effect", "solid-js", "solid-js/store", "solid-js/web"])
+    expect(required.sort()).toEqual(["@opencode/client/solid", "@opencode/plugin/gui", "effect", "solid-js", "solid-js/store", "solid-js/web"])
     expect(Object.fromEntries(Object.entries(definition.stores).map(([key, value]) => [key, value.scope]))).toEqual({
       chats: "session",
       ledger: "global",

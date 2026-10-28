@@ -29,7 +29,7 @@ afterEach(() => {
 
 async function mount(chat: Partial<Chat> = {}) {
   const fake = fakeServer()
-  const host = makeHost({ server: fake.server, ui })
+  const host = makeHost({ server: fake.server, ui, data: (server) => server.data })
   const session = mounted(fake.server, "ses_main")
   const id = "chat-1"
 
@@ -237,7 +237,7 @@ describe("the side chat panel", () => {
 describe("the registrations", () => {
   function load() {
     const fake = fakeServer()
-    const host = makeHost({ server: fake.server, ui })
+    const host = makeHost({ server: fake.server, ui, data: (server) => server.data })
     const added: { registry: unknown; item: unknown }[] = []
     const ctx = {
       ...host.ctx,

@@ -1,6 +1,7 @@
 // Drives src/model.ts against a real OpenCode server whose model is the scripted fake in fake-llm.mjs.
 // Start one with test/integration/serve.sh, export the variables it prints, then run `npm run test:integration`.
 // Skipped when OPENCODE_URL is not set.
+import { createSignal } from "solid-js"
 import { afterAll, beforeAll, describe, expect, test } from "vitest"
 import type { OpenCodeClient } from "@opencode/client"
 import type { ServerRef } from "@opencode/plugin/gui"
@@ -119,14 +120,53 @@ describe.skipIf(!enabled)("side chats against a real OpenCode server", () => {
     expect(await messages(main.id)).toHaveLength(before.length)
 
     // What the tab draws, from the synced store the app uses.
-    await until(() => shownMessages(server.data.session.message.list(chat.sessionID!), chat.base).length === 4, 10_000, "store sync")
-    expect(shownMessages(server.data.session.message.list(chat.sessionID!), chat.base).map((message) => message.type)).toEqual([
+    await until(() => shownMessages(host.model.data(session).session.message.list(chat.sessionID!), chat.base).length === 4, 10_000, "store sync")
+    expect(shownMessages(host.model.data(session).session.message.list(chat.sessionID!), chat.base).map((message) => message.type)).toEqual([
       "user",
       "assistant",
       "user",
       "assistant",
     ])
     host.dispose()
+  })
+
+  test("the transcript survives the app's session retention: the posted text shows at once, then the reply", async () => {
+    // As in the app: the routed main session and its tab keep their transcripts; the unrouted fork does not.
+    const [routed, setRouted] = createSignal<string>()
+    const retained = makeServer(client, { routed, tabs: () => (routed() ? [routed()!] : []) })
+    const main = await parent("Main retention")
+
+    setRouted(main.id)
+    const host = makeHost({ server: retained.server })
+    const session = mounted(retained.server, main.id)
+
+    host.route(session)
+    await host.model.open(session)
+    const chat = host.chats(session).value.chats[0]!
+    const store = host.model.data(session)
+    const drawn = () => [
+      ...shownMessages(store.session.message.list(chat.sessionID!), chat.base).map((message) =>
+        message.type === "user" ? `user:${message.text}` : message.type,
+      ),
+      ...store.session.pending.list(chat.sessionID!).flatMap((item) => (item.type === "user" ? [`pending:${item.payload.text}`] : [])),
+    ]
+
+    await host.model.sync(session, chat.sessionID!)
+    host.model.setDraft(chat.id, "slow side question")
+    host.model.send(session, chat.id)
+    // The posted text shows before the reply, while the fork works.
+    await until(() => drawn().some((item) => item.endsWith(":slow side question")), 5_000, "posted text drawn")
+    await until(() => host.model.running(session, chat.sessionID), 10_000, "running")
+    await until(() => drawn().includes("assistant"), 15_000, "streaming reply drawn")
+    host.model.stop(session, chat.id)
+    await idle(chat.sessionID!)
+    await new Promise((resolve) => setTimeout(resolve, 1000))
+
+    // Still there once the turn ends and the app's retention has run again.
+    expect(drawn()).toEqual(["user:slow side question", "assistant", "idle"])
+    expect(retained.server.data.session.message.list(chat.sessionID!)).toEqual([])
+    host.dispose()
+    retained.close()
   })
 
   test("/side <question> sends the question as the side chat's first message", async () => {
@@ -220,8 +260,8 @@ describe.skipIf(!enabled)("side chats against a real OpenCode server", () => {
 
     host.model.setDraft(chat.id, "run something")
     host.model.send(session, chat.id)
-    await server.data.session.permission.sync(chat.sessionID!)
-    const request = await until(() => server.data.session.permission.list(chat.sessionID!)[0], 30_000, "permission request")
+    await host.model.sync(session, chat.sessionID!)
+    const request = await until(() => host.model.data(session).session.permission.list(chat.sessionID!)[0], 30_000, "permission request")
 
     expect(request.action).toBe("shell")
     await host.model.allow(session, chat.id, request.id, "once")
@@ -238,8 +278,8 @@ describe.skipIf(!enabled)("side chats against a real OpenCode server", () => {
 
     host.model.setDraft(chat.id, "ask me a question")
     host.model.send(session, chat.id)
-    await server.data.session.form.sync(chat.sessionID!)
-    const form = await until(() => server.data.session.form.list(chat.sessionID!)?.[0], 30_000, "form")
+    await host.model.sync(session, chat.sessionID!)
+    const form = await until(() => host.model.data(session).session.form.list(chat.sessionID!)?.[0], 30_000, "form")
 
     await host.model.answer(session, chat.id, form.id, { [form.fields[0].key]: "Blue" })
     await until(async () => (await replies(chat.sessionID!)).some((text) => text.includes('"Pick a color"="Blue"')), 30_000, "answer used")
